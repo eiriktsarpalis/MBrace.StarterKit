@@ -1,6 +1,6 @@
 ﻿(*** hide ***)
-#load "ThespianCluster.fsx"
-//#load "AzureCluster.fsx"
+//#load "ThespianCluster.fsx"
+#load "AzureCluster.fsx"
 
 // Note: Before running, choose your cluster version at the top of this script.
 // If necessary, edit AzureCluster.fsx to enter your connection strings.
@@ -55,8 +55,9 @@ let private noiseWords =
 let isNoiseWord (word : string) = word.Length <= 3 || noiseWords.Contains word
 
 /// Downloads and caches text files across the cluster
-let downloadAndCacheTextFiles (urls : seq<string>) : Cloud<PersistedCloudFlow<string>> =
-    CloudFlow.OfHttpFileByLine urls
+let downloadAndCacheTextFiles deg (urls : seq<string>) : Cloud<PersistedCloudFlow<string>> =
+    CloudFlow.OfCloudFileByLine urls
+    |> CloudFlow.withDegreeOfParallelism deg
     |> CloudFlow.persist StorageLevel.Memory
 
 /// Computes the word count using the input cloud flow
@@ -78,11 +79,15 @@ let computeWordCount (cutoff : int) (words : CloudFlow<string>) : Cloud<WordCoun
 let files = TextFiles.crawlForTextFiles() // get text file data from textfiles.com
 let testedFiles = files // |> Seq.take 50 // uncomment if you want to use a smaller subset
 
+let files = cluster.Store.CloudFileSystem.File.Enumerate("/textfiles") |> Array.map (fun f -> f.Path)
+let multiply n = Seq.init n (fun _ -> files) |> Seq.concat |> Seq.toArray
+
 // Step 2. Download URIs to memory of workers in cluster
-let downloadProc = cluster.CreateProcess(downloadAndCacheTextFiles testedFiles) // download text and load to cluster
+let mkProc n = cluster.CreateProcess(downloadAndCacheTextFiles (n * 2) (multiply n)) // download text and load to cluster
+let downloadProc = mkProc 22
 
 cluster.ShowWorkers()
-cluster.ShowProcesses()
+downloadProc.ShowInfo()
 
 let persistedFlow = downloadProc.Result // get PersistedCloudFlow
 
@@ -90,6 +95,36 @@ let persistedFlow = downloadProc.Result // get PersistedCloudFlow
 let wordCountProc = cluster.CreateProcess(computeWordCount 100 persistedFlow) // perform the wordcount operation
 
 cluster.ShowWorkers()
-cluster.ShowProcesses()
+wordCountProc.ShowInfo()
 
 wordCountProc.Result
+
+cluster.Workers.Length
+
+
+
+
+
+open System
+open System.IO
+
+let files = Directory.EnumerateFiles("/Users/eirik/Desktop/textFiles.com") |> Seq.toArray
+
+files |> Array.Parallel.map (fun f -> cluster.Store.CloudFileSystem.File.Upload(f, "/textfiles/" + Path.GetFileName f))
+cluster.Store.CloudFileSystem.File.Upload(files, "/textfiles/")
+let data = files |> Seq.map File.ReadAllLines |> Seq.toArray
+
+
+
+
+#time
+
+data
+|> Seq.concat
+|> Seq.collect splitToWords
+|> Seq.map normalize
+|> Seq.filter (not << isNoiseWord)
+|> Seq.countBy id
+|> Seq.sortBy (fun (_,c) -> -c)
+|> Seq.take 100
+|> Seq.toArray
