@@ -1,6 +1,6 @@
 ﻿(*** hide ***)
-#load "ThespianCluster.fsx"
-//#load "AzureCluster.fsx"
+//#load "ThespianCluster.fsx"
+#load "AzureCluster.fsx"
 
 // Note: Before running, choose your cluster version at the top of this script.
 // If necessary, edit AzureCluster.fsx to enter your connection strings.
@@ -149,8 +149,9 @@ let validateCloud (classifier : Classifier) (training : TrainingImage []) (valid
 }
 
 /// Clasify test images using MBrace
-let classifyCloud (classifier : Classifier) (training : TrainingImage []) (images : Image []) =
+let classifyCloud (classifier : Classifier) n (training : TrainingImage []) (images : Image []) =
     CloudFlow.OfArray images
+    |> CloudFlow.withDegreeOfParallelism n
     |> CloudFlow.map (fun img -> img.Id, classifier training img)
     |> CloudFlow.toArray
 
@@ -159,7 +160,8 @@ let classifyCloud (classifier : Classifier) (training : TrainingImage []) (image
 let validateProc = cloud { return! validateCloud classifier training.[0 .. 39999] training.[40000 ..] } |> cluster.CreateProcess
 
 // 2. Send Classify job
-let classifyProc = cloud { return! classifyCloud classifier training tests } |> cluster.CreateProcess
+let classifyProc = cloud { return! classifyCloud classifier 32 training tests } |> cluster.CreateProcess
 
 cluster.ShowWorkers()
 cluster.ShowProcesses()
+classifyProc.ShowInfo()
